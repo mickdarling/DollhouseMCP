@@ -1,0 +1,94 @@
+name: Docker Debug - Minimal Test
+# Extremely simple workflow to diagnose Docker CI hanging issue
+# Start with basic test, then uncomment levels progressively
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/docker-ci-infrastructure-debug]
+
+jobs:
+  # Level 0: Basic Actions Test
+  basic-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Echo test
+        run: echo "GitHub Actions is running at $(date)"
+        
+      - name: System info
+        run: |
+          echo "Runner: $(uname -a)"
+          echo "Docker version: $(docker --version)"
+          echo "Available space: $(df -h /)"
+          echo "Memory: $(free -h)"
+
+  # Level 1: Simple Docker Test (ACTIVE - testing Docker functionality)
+  simple-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Docker hello world
+        timeout-minutes: 2
+        run: |
+          echo "Testing Docker at $(date)"
+          docker run --rm alpine:latest echo "Docker works!"
+          echo "Docker test completed at $(date)"
+  
+  # Level 2: Docker Build Test (ACTIVE - testing minimal build)
+  docker-build-minimal:
+    runs-on: ubuntu-latest  
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Build minimal Dockerfile
+        timeout-minutes: 2
+        run: |
+          echo "Building minimal Dockerfile at $(date)"
+          echo "FROM alpine:latest" > Dockerfile.minimal
+          echo 'CMD ["echo", "Built successfully"]' >> Dockerfile.minimal
+          docker build -f Dockerfile.minimal -t test:minimal .
+          docker run --rm test:minimal
+          echo "Minimal build test completed at $(date)"
+
+  # Level 3: Production Dockerfile Test (ACTIVE - testing actual Dockerfile)
+  docker-build-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Build production Dockerfile
+        timeout-minutes: 8
+        run: |
+          echo "Building production Dockerfile at $(date)"
+          cd docker
+          # Build with timeout to prevent hanging on npm operations
+          timeout 480 docker build -f Dockerfile -t mcp-server-test .. || {
+            echo "Build timed out after 8 minutes"
+            exit 1
+          }
+          echo "Production build completed at $(date)"
+
+  # Level 4: Docker Compose Debug Test (ACTIVE - testing with minimal compose)  
+  docker-compose-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Test minimal Docker Compose
+        timeout-minutes: 3
+        run: |
+          echo "Starting Docker Compose test at $(date)"
+          cd docker
+          # Test with our debug compose file that has simpler services
+          docker compose -f docker-compose.debug.yml run --rm level1-echo
+          echo "Docker Compose test completed at $(date)"

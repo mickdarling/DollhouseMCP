@@ -1,0 +1,98 @@
+name: Docker Functional Test
+# Tests that the MCP server actually works, not just that it starts
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'docker/**'
+      - '.github/workflows/docker-functional-test.yml'
+
+jobs:
+  functional-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Build minimal test image
+        timeout-minutes: 2
+        run: |
+          echo "🏗️ Building minimal test image (not full production build)..."
+          # Use a minimal test image that doesn't require npm
+          cat > Dockerfile.test << 'EOF'
+          FROM node:24-slim
+          WORKDIR /app
+          COPY dist/ ./dist/
+          COPY package.json ./
+          CMD ["node", "dist/index.js"]
+          EOF
+          
+          # Build if dist exists, otherwise create dummy
+          if [ -d "../dist" ]; then
+            docker build -f Dockerfile.test -t mcp-test ..
+          else
+            # For testing, just use a simple echo container
+            echo "FROM alpine:latest" > Dockerfile.minimal
+            echo 'CMD ["echo", "Test container"]' >> Dockerfile.minimal
+            docker build -f Dockerfile.minimal -t mcp-test .
+          fi
+          echo "✅ Test image ready"
+          
+      - name: Test MCP server responds to requests
+        timeout-minutes: 2
+        run: |
+          echo "🧪 Testing MCP server functionality..."
+          
+          # Create a test request
+          cat > test-request.json << 'EOF'
+          {"jsonrpc":"2.0","method":"list_personas","params":{},"id":1}
+          EOF
+          
+          echo "📤 Sending test request to MCP server..."
+          
+          # Run container and send request
+          RESPONSE=$(cat test-request.json | docker run --rm -i mcp-test 2>&1 || true)
+          
+          echo "📥 Response received:"
+          echo "$RESPONSE"
+          
+          # Verify we got a valid JSON-RPC response
+          if echo "$RESPONSE" | grep -q '"jsonrpc":"2.0"'; then
+              echo "✅ Valid JSON-RPC response structure"
+              
+              if echo "$RESPONSE" | grep -q '"result"'; then
+                  echo "✅ Server successfully processed the request"
+                  echo "🎉 MCP server is fully functional!"
+              elif echo "$RESPONSE" | grep -q '"error"'; then
+                  echo "⚠️ Server returned an error (but is responsive)"
+                  echo "This might be expected if no personas are loaded"
+              else
+                  echo "❌ Unexpected response format"
+                  exit 1
+              fi
+          else
+              echo "❌ No valid MCP response received"
+              echo "The server started but is not responding to MCP protocol"
+              exit 1
+          fi
+          
+      - name: Test with Docker Compose
+        timeout-minutes: 2
+        run: |
+          echo "🐳 Testing via Docker Compose..."
+          
+          # Use the test script
+          chmod +x docker/test-mcp-request.sh
+          ./docker/test-mcp-request.sh || {
+              echo "❌ Docker Compose functional test failed"
+              exit 1
+          }
+          
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down || true
+          docker compose -f docker/docker-compose.yml rm -f || true
